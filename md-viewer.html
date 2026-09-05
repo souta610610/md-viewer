@@ -669,17 +669,47 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     // 端末のライト/ダーク設定だけで決める（画面幅では切り替えない）。
     // Chrome はスマホ幅では theme-color の明るさから、タブレット幅では端末設定から
     // アイコン色を決めるため、端末設定に合わせた色にしておけばどちらの幅でも読める。
-    // 折りたたみの開閉時に Chrome が動的な色変更を取りこぼす問題もこれで回避できる。
     // 値はヘッダー（--ui-bg）と同じ色にして一体化させる。
+    //
+    // 折りたたみ端末の開閉（画面リサイズ）後、Chrome が theme-color の変更を取りこぼして
+    // 内部の既定色に戻る問題への対処として、リサイズ時は <meta> 要素そのものを
+    // 削除して作り直し、Chrome に色の再計算を強制する。
     const systemDarkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+    function currentThemeColor() {
+      return systemDarkQuery.matches ? '#1f2733' : '#e8ecf1';
+    }
 
     function updateThemeColor() {
       const meta = document.querySelector('meta[name="theme-color"]');
       if (!meta) return;
-      meta.setAttribute('content', systemDarkQuery.matches ? '#1f2733' : '#e8ecf1');
+      meta.setAttribute('content', currentThemeColor());
+    }
+
+    // <meta name="theme-color"> を DOM から削除して再生成する
+    function reinsertThemeColor() {
+      const old = document.querySelector('meta[name="theme-color"]');
+      if (old) old.remove();
+      const meta = document.createElement('meta');
+      meta.name = 'theme-color';
+      meta.content = currentThemeColor();
+      document.head.appendChild(meta);
+    }
+
+    // 連続する resize を 1 回にまとめ、描画が落ち着いてから再挿入する
+    let themeColorReinsertTimer = null;
+    function scheduleThemeColorReinsert() {
+      clearTimeout(themeColorReinsertTimer);
+      themeColorReinsertTimer = setTimeout(reinsertThemeColor, 300);
     }
 
     systemDarkQuery.addEventListener('change', updateThemeColor);
+    window.addEventListener('resize', scheduleThemeColorReinsert);
+    window.addEventListener('orientationchange', scheduleThemeColorReinsert);
+    // 折りたたみ開閉後にアプリへ戻ってきた場合の保険
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') scheduleThemeColorReinsert();
+    });
 
     function toggleTheme() {
       state.theme = state.theme === 'light' ? 'dark' : 'light';
