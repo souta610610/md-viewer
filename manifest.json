@@ -6,7 +6,7 @@
   "lang": "ja",
   "start_url": "./md-viewer.html",
   "scope": "./",
-  "display": "standalone",
+  "display": "fullscreen",
   "orientation": "any",
   "background_color": "#e8ecf1",
   "theme_color": "#e8ecf1",

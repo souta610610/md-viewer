@@ -1,6 +1,6 @@
 // MD Viewer Service Worker
 // 方針: HTML は network-first（更新をすぐ反映）、取れなければキャッシュで起動（オフライン対応）
-const CACHE = 'md-viewer-v5';
+const CACHE = 'md-viewer-v6';
 const PRECACHE = [
   './md-viewer.html',
   './manifest.json',
