@@ -541,7 +541,6 @@ if(__exports != exports)module.exports = exports;return module.exports}));
       <button class="mode-btn" id="editModeBtn" title="貼付モード (Ctrl+E)">📝 <span class="btn-label">貼付</span></button>
       <button class="mode-btn" id="viewModeBtn" title="表示モード (Ctrl+Enter)">👁 <span class="btn-label">表示</span></button>
       <button class="mode-btn" id="themeBtn" title="テーマ切替（ライト/ダーク）"></button>
-      <button class="mode-btn" id="fsBtn" title="全画面表示"></button>
     </div>
   </header>
   <input type="file" id="fileInput" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple>
@@ -629,7 +628,6 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     const editBtn = document.getElementById('editModeBtn');
     const viewBtn = document.getElementById('viewModeBtn');
     const openBtn = document.getElementById('openBtn');
-    const fsBtn = document.getElementById('fsBtn');
     const themeBtn = document.getElementById('themeBtn');
     const fileInput = document.getElementById('fileInput');
     const tocToggleBtn = document.getElementById('tocToggle');
@@ -645,9 +643,25 @@ if(__exports != exports)module.exports = exports;return module.exports}));
       const isLight = state.theme === 'light';
       themeBtn.innerHTML = (isLight ? '🌙 ' : '☀️ ') + '<span class="btn-label">' + (isLight ? 'ダーク' : 'ライト') + '</span>';
       themeBtn.title = isLight ? 'ダークテーマに切替' : 'ライトテーマに切替';
-      const meta = document.querySelector('meta[name="theme-color"]');
-      if (meta) meta.setAttribute('content', '#1f2733');
     }
+
+    // ステータスバー色（meta theme-color）
+    // Chrome はタブレット幅（>600px）ではステータスバーのアイコン色を theme-color からではなく
+    // 端末のライト/ダーク設定から決めるため、「端末ライト × 広い画面」のときだけ明るい色にして
+    // 黒いアイコンが読めるようにする。それ以外はヘッダーと同じ濃色（アイコンは白）。
+    const wideScreenQuery = window.matchMedia('(min-width: 601px)');
+    const systemDarkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+    function updateThemeColor() {
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (!meta) return;
+      const needsLight = wideScreenQuery.matches && !systemDarkQuery.matches;
+      meta.setAttribute('content', needsLight ? '#e8ecf1' : '#1f2733');
+    }
+
+    wideScreenQuery.addEventListener('change', updateThemeColor);
+    systemDarkQuery.addEventListener('change', updateThemeColor);
+    window.addEventListener('resize', updateThemeColor); // 折りたたみ展開時の保険
 
     function toggleTheme() {
       state.theme = state.theme === 'light' ? 'dark' : 'light';
@@ -807,35 +821,6 @@ if(__exports != exports)module.exports = exports;return module.exports}));
       applyMode();
     }
 
-    // ==================== 全画面表示 ====================
-    const FS_EXPAND = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M16 21h3a2 2 0 0 0 2-2v-3M8 21H5a2 2 0 0 1-2-2v-3"/></svg>';
-    const FS_COMPRESS = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3M16 3v3a2 2 0 0 0 2 2h3M16 21v-3a2 2 0 0 1 2-2h3M8 21v-3a2 2 0 0 0-2-2H3"/></svg>';
-
-    function isFullscreen() {
-      return !!(document.fullscreenElement || document.webkitFullscreenElement);
-    }
-
-    function updateFsButton() {
-      const on = isFullscreen();
-      fsBtn.innerHTML = (on ? FS_COMPRESS : FS_EXPAND) + '<span class="btn-label">' + (on ? '解除' : '全画面') + '</span>';
-      fsBtn.title = on ? '全画面を解除' : '全画面表示';
-      fsBtn.classList.toggle('active', on);
-    }
-
-    function toggleFullscreen() {
-      if (isFullscreen()) {
-        const exit = document.exitFullscreen || document.webkitExitFullscreen;
-        if (exit) exit.call(document);
-      } else {
-        const el = document.documentElement;
-        const req = el.requestFullscreen || el.webkitRequestFullscreen;
-        if (req) {
-          const p = req.call(el);
-          if (p && p.catch) p.catch(function () {});
-        }
-      }
-    }
-
     // ==================== モード切替 ====================
     function setMode(mode) {
       state.mode = mode;
@@ -950,9 +935,6 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     tocToggleBtn.addEventListener('click', toggleToc);
     openBtn.addEventListener('click', () => fileInput.click());
     themeBtn.addEventListener('click', toggleTheme);
-    fsBtn.addEventListener('click', toggleFullscreen);
-    document.addEventListener('fullscreenchange', updateFsButton);
-    document.addEventListener('webkitfullscreenchange', updateFsButton);
     fileInput.addEventListener('change', (e) => {
       const files = e.target.files;
       if (files && files.length) openFiles(files);
@@ -1007,7 +989,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
       renderTabs();
       syncEditorFromState();
       applyMode();
-      updateFsButton();
+      updateThemeColor();
     }
 
     init();
