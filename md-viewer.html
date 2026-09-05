@@ -82,9 +82,9 @@ if(__exports != exports)module.exports = exports;return module.exports}));
 </script>
   <style>
     /* ==================== テーマ変数 ==================== */
-    /* UI（ヘッダー・目次）の配色は端末のライト/ダーク設定に追従させる。
-       理由: Chrome はタブレット幅ではステータスバーのアイコン色を端末設定で決めるため、
-       ステータスバー色（theme-color）と UI 色を端末設定に合わせて一体化させる。
+    /* UI（ヘッダー・目次）の配色は端末設定によらず常に紺色系で固定する。
+       ステータスバー色（meta theme-color）だけは端末のライト/ダーク設定に追従させる
+       （Chrome はタブレット幅ではステータスバーのアイコン色を端末設定で決めるため）。
        本文の配色（--bg/--fg）はアプリ内の切替ボタンで独立に選べる。 */
     :root {
       --ui-bg: #1f2733;
@@ -99,19 +99,6 @@ if(__exports != exports)module.exports = exports;return module.exports}));
       --open: #2e8b57;
       --open-text: #eafff1;
       --open-hover: #36a368;
-    }
-
-    @media (prefers-color-scheme: light) {
-      :root {
-        --ui-bg: #e8ecf1;
-        --ui-bg-soft: #d6dce4;
-        --ui-border: #c3ccd8;
-        --ui-text: #1f2733;
-        --ui-text-dim: #4a5666;
-        --ui-hover-bg: #c3ccd8;
-        --ui-hover-text: #1f2733;
-        --ui-active-bg: #b1bbc8;
-      }
     }
 
     /* ライト（紙のような）テーマ */
