@@ -82,16 +82,36 @@ if(__exports != exports)module.exports = exports;return module.exports}));
 </script>
   <style>
     /* ==================== テーマ変数 ==================== */
+    /* UI（ヘッダー・目次）の配色は端末のライト/ダーク設定に追従させる。
+       理由: Chrome はタブレット幅ではステータスバーのアイコン色を端末設定で決めるため、
+       ステータスバー色（theme-color）と UI 色を端末設定に合わせて一体化させる。
+       本文の配色（--bg/--fg）はアプリ内の切替ボタンで独立に選べる。 */
     :root {
-      /* UI（ヘッダー等）は両テーマ共通で落ち着いた濃色 */
       --ui-bg: #1f2733;
       --ui-bg-soft: #2a3340;
       --ui-border: #3a4757;
       --ui-text: #c3ccd8;
       --ui-text-dim: #8a96a5;
+      --ui-hover-bg: #3a4757;
+      --ui-hover-text: #fff;
+      --ui-active-bg: #4a5666;
       --accent: #e0506e;
       --open: #2e8b57;
       --open-text: #eafff1;
+      --open-hover: #36a368;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --ui-bg: #e8ecf1;
+        --ui-bg-soft: #d6dce4;
+        --ui-border: #c3ccd8;
+        --ui-text: #1f2733;
+        --ui-text-dim: #4a5666;
+        --ui-hover-bg: #c3ccd8;
+        --ui-hover-text: #1f2733;
+        --ui-active-bg: #b1bbc8;
+      }
     }
 
     /* ライト（紙のような）テーマ */
@@ -247,7 +267,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
       flex-shrink: 0;
     }
 
-    .tab-add:hover { color: #fff; background: var(--ui-bg-soft); }
+    .tab-add:hover { color: var(--ui-hover-text); background: var(--ui-bg-soft); }
 
     .mode-switcher {
       display: flex;
@@ -271,10 +291,10 @@ if(__exports != exports)module.exports = exports;return module.exports}));
       white-space: nowrap;
     }
 
-    .mode-btn:hover { background: #3a4757; color: #fff; }
+    .mode-btn:hover { background: var(--ui-hover-bg); color: var(--ui-hover-text); }
     .mode-btn.active { background: var(--accent); color: #fff; }
     #openBtn { background: var(--open); color: var(--open-text); }
-    #openBtn:hover { background: #36a368; color: #fff; }
+    #openBtn:hover { background: var(--open-hover); color: #fff; }
     .mode-btn svg { display: block; }
 
     .toc-toggle {
@@ -289,8 +309,8 @@ if(__exports != exports)module.exports = exports;return module.exports}));
       white-space: nowrap;
     }
 
-    .toc-toggle:hover { background: #3a4757; color: #fff; }
-    .toc-toggle.active { background: #4a5666; color: #fff; }
+    .toc-toggle:hover { background: var(--ui-hover-bg); color: var(--ui-hover-text); }
+    .toc-toggle.active { background: var(--ui-active-bg); color: var(--ui-hover-text); }
     .toc-toggle.hidden { display: none; }
 
     #fileInput { display: none; }
@@ -349,7 +369,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
 
     .toc-list a:hover {
       background: var(--ui-bg-soft);
-      color: #fff;
+      color: var(--ui-hover-text);
     }
 
     .toc-empty {
@@ -646,22 +666,20 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     }
 
     // ステータスバー色（meta theme-color）
-    // Chrome はタブレット幅（>600px）ではステータスバーのアイコン色を theme-color からではなく
-    // 端末のライト/ダーク設定から決めるため、「端末ライト × 広い画面」のときだけ明るい色にして
-    // 黒いアイコンが読めるようにする。それ以外はヘッダーと同じ濃色（アイコンは白）。
-    const wideScreenQuery = window.matchMedia('(min-width: 601px)');
+    // 端末のライト/ダーク設定だけで決める（画面幅では切り替えない）。
+    // Chrome はスマホ幅では theme-color の明るさから、タブレット幅では端末設定から
+    // アイコン色を決めるため、端末設定に合わせた色にしておけばどちらの幅でも読める。
+    // 折りたたみの開閉時に Chrome が動的な色変更を取りこぼす問題もこれで回避できる。
+    // 値はヘッダー（--ui-bg）と同じ色にして一体化させる。
     const systemDarkQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
     function updateThemeColor() {
       const meta = document.querySelector('meta[name="theme-color"]');
       if (!meta) return;
-      const needsLight = wideScreenQuery.matches && !systemDarkQuery.matches;
-      meta.setAttribute('content', needsLight ? '#e8ecf1' : '#1f2733');
+      meta.setAttribute('content', systemDarkQuery.matches ? '#1f2733' : '#e8ecf1');
     }
 
-    wideScreenQuery.addEventListener('change', updateThemeColor);
     systemDarkQuery.addEventListener('change', updateThemeColor);
-    window.addEventListener('resize', updateThemeColor); // 折りたたみ展開時の保険
 
     function toggleTheme() {
       state.theme = state.theme === 'light' ? 'dark' : 'light';
