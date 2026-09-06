@@ -1029,6 +1029,25 @@ if(__exports != exports)module.exports = exports;return module.exports}));
 
     init();
 
+    // ==================== OS からのファイル起動（PWA File Handling） ====================
+    // Windows の「プログラムから開く」や関連付けで .md を渡されたとき、
+    // PC 版 Chrome/Edge は launchQueue 経由でファイルを渡してくる。
+    // manifest.json の file_handlers と対になる処理。Android では launchQueue が無いので何もしない。
+    if ('launchQueue' in window && typeof window.launchQueue.setConsumer === 'function') {
+      window.launchQueue.setConsumer(async (launchParams) => {
+        if (!launchParams.files || launchParams.files.length === 0) return;
+        const files = [];
+        for (const handle of launchParams.files) {
+          try {
+            files.push(await handle.getFile());
+          } catch (e) {
+            alert('ファイルを受け取れませんでした。' + String.fromCharCode(10) + (e && e.message ? e.message : ''));
+          }
+        }
+        if (files.length > 0) await openFiles(files);
+      });
+    }
+
     // ==================== PWA: Service Worker 登録 ====================
     // file:// で開いた場合は登録できないので静かにスキップ
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
