@@ -203,6 +203,14 @@ if(__exports != exports)module.exports = exports;return module.exports}));
 
     .file-tab:hover { background: var(--ui-bg-soft); color: var(--ui-text); }
 
+    /* ドラッグ並び替え中のタブ */
+    .file-tab.dragging {
+      opacity: 0.55;
+      background: var(--ui-bg-soft);
+      color: var(--ui-text);
+    }
+    .tab-bar.reordering { user-select: none; -webkit-user-select: none; }
+
     .file-tab.active {
       background: var(--bg);
       color: var(--fg);
@@ -729,7 +737,19 @@ if(__exports != exports)module.exports = exports;return module.exports}));
           el.appendChild(closeBtn);
         }
 
-        el.addEventListener('click', () => setActiveTab(tab.id));
+        el.addEventListener('click', () => {
+          if (tabDrag.suppressClick) return; // ドラッグ直後のクリックは無視
+          setActiveTab(tab.id);
+        });
+        // ホイールクリック（中ボタン）でタブを閉じる（Chrome と同じ操作感）
+        el.addEventListener('mousedown', (e) => {
+          if (e.button === 1) e.preventDefault(); // 中ボタンの自動スクロールを抑止
+        });
+        el.addEventListener('auxclick', (e) => {
+          if (e.button !== 1) return;
+          e.preventDefault();
+          closeTab(tab.id);
+        });
         el.addEventListener('dblclick', (e) => {
           e.preventDefault();
           startRename(tab.id, el);
@@ -737,6 +757,128 @@ if(__exports != exports)module.exports = exports;return module.exports}));
         tabBar.appendChild(el);
       });
     }
+
+    // ==================== タブのドラッグ並び替え ====================
+    // マウス: 少し動かしたらドラッグ開始。タッチ: 長押し後にドラッグ開始（横スクロールと共存させるため）。
+    // ドラッグ中は DOM 上でタブを入れ替え、離した時点で state.tabs の順序を DOM に合わせる。
+    const tabDrag = {
+      pointerId: null,
+      el: null,
+      startX: 0,
+      startY: 0,
+      active: false,
+      holdTimer: null,
+      suppressClick: false
+    };
+
+    function tabDragBegin() {
+      if (!tabDrag.el) return;
+      tabDrag.active = true;
+      tabDrag.el.classList.add('dragging');
+      tabBar.classList.add('reordering');
+      try { tabBar.setPointerCapture(tabDrag.pointerId); } catch (e) { /* 無視 */ }
+    }
+
+    function tabDragReset() {
+      clearTimeout(tabDrag.holdTimer);
+      if (tabDrag.el) tabDrag.el.classList.remove('dragging');
+      tabBar.classList.remove('reordering');
+      if (tabDrag.pointerId !== null) {
+        try { tabBar.releasePointerCapture(tabDrag.pointerId); } catch (e) { /* 無視 */ }
+      }
+      tabDrag.pointerId = null;
+      tabDrag.el = null;
+      tabDrag.active = false;
+    }
+
+    function tabDragMoveTo(clientX) {
+      // ポインタ位置より中心が左にあるタブの数 = 挿入すべき位置（ドラッグ中のタブを除く）
+      const dragged = tabDrag.el;
+      const others = Array.from(tabBar.querySelectorAll('.file-tab')).filter(el => el !== dragged);
+      let insertIdx = 0;
+      for (const other of others) {
+        const r = other.getBoundingClientRect();
+        if (clientX > r.left + r.width / 2) insertIdx++;
+      }
+      const ref = others[insertIdx] || null; // null なら末尾
+      if (dragged.nextSibling !== ref) tabBar.insertBefore(dragged, ref);
+    }
+
+    function tabDragAutoScroll(clientX) {
+      const r = tabBar.getBoundingClientRect();
+      const edge = 32;
+      if (clientX < r.left + edge) tabBar.scrollLeft -= 10;
+      else if (clientX > r.right - edge) tabBar.scrollLeft += 10;
+    }
+
+    function tabDragCommit() {
+      const order = Array.from(tabBar.querySelectorAll('.file-tab')).map(el => el.dataset.tabId);
+      const reordered = order.map(id => state.tabs.find(t => t.id === id)).filter(Boolean);
+      if (reordered.length === state.tabs.length) {
+        const changed = reordered.some((t, i) => t !== state.tabs[i]);
+        state.tabs = reordered;
+        if (changed) saveState();
+      }
+      renderTabs();
+    }
+
+    tabBar.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      const el = e.target.closest('.file-tab');
+      if (!el || e.target.closest('.tab-close') || e.target.closest('.tab-name-input')) return;
+      if (state.tabs.length <= 1) return;
+      tabDrag.pointerId = e.pointerId;
+      tabDrag.el = el;
+      tabDrag.startX = e.clientX;
+      tabDrag.startY = e.clientY;
+      tabDrag.active = false;
+      tabDrag.suppressClick = false;
+      clearTimeout(tabDrag.holdTimer);
+      if (e.pointerType !== 'mouse') {
+        // タッチ・ペンは長押しで開始
+        tabDrag.holdTimer = setTimeout(() => {
+          if (tabDrag.el === el && !tabDrag.active) {
+            tabDragBegin();
+            if (navigator.vibrate) navigator.vibrate(15);
+          }
+        }, 350);
+      }
+    });
+
+    tabBar.addEventListener('pointermove', (e) => {
+      if (tabDrag.pointerId !== e.pointerId || !tabDrag.el) return;
+      const dx = e.clientX - tabDrag.startX;
+      const dy = e.clientY - tabDrag.startY;
+      if (!tabDrag.active) {
+        if (e.pointerType === 'mouse') {
+          if (Math.abs(dx) > 6) tabDragBegin();
+        } else if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+          // 長押し前に動いた → スクロール操作とみなして中止
+          tabDragReset();
+        }
+        if (!tabDrag.active) return;
+      }
+      tabDragMoveTo(e.clientX);
+      tabDragAutoScroll(e.clientX);
+    });
+
+    function tabDragEnd(e) {
+      if (tabDrag.pointerId !== e.pointerId) return;
+      const wasActive = tabDrag.active;
+      tabDragReset();
+      if (wasActive) {
+        tabDrag.suppressClick = true;
+        setTimeout(() => { tabDrag.suppressClick = false; }, 0);
+        tabDragCommit();
+      }
+    }
+    tabBar.addEventListener('pointerup', tabDragEnd);
+    tabBar.addEventListener('pointercancel', tabDragEnd);
+
+    // ドラッグ中はタッチによる横スクロールを止める（pointercancel でドラッグが切れるのを防ぐ）
+    tabBar.addEventListener('touchmove', (e) => {
+      if (tabDrag.active) e.preventDefault();
+    }, { passive: false });
 
     function startRename(tabId, tabEl) {
       const tab = state.tabs.find(t => t.id === tabId);
