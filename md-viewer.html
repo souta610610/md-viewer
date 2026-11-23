@@ -307,6 +307,10 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     .toc-toggle:hover { background: var(--ui-hover-bg); color: var(--ui-hover-text); }
     .toc-toggle.active { background: var(--ui-active-bg); color: var(--ui-hover-text); }
     .toc-toggle.hidden { display: none; }
+    .mode-btn.hidden { display: none; }
+
+    /* 未保存の目印（PC の編集機能。ファイルに紐づくタブだけに付く） */
+    .file-tab.dirty .tab-name::before { content: '● '; color: var(--accent); }
 
     #fileInput { display: none; }
 
@@ -552,6 +556,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     <button class="tab-add" id="tabAdd" title="新規タブ (Ctrl+T)">+</button>
     <div class="mode-switcher">
       <button class="mode-btn" id="openBtn" title="ファイルを開く（Google Driveも選べます）">📂 <span class="btn-label">開く</span></button>
+      <button class="mode-btn hidden" id="saveBtn" title="上書き保存 (Ctrl+S)　名前を付けて保存 (Ctrl+Shift+S)">💾 <span class="btn-label">保存</span></button>
       <button class="toc-toggle" id="tocToggle" title="目次の表示切替 (Ctrl+B)">📑 <span class="btn-label">目次</span></button>
       <button class="mode-btn" id="editModeBtn" title="貼付モード (Ctrl+E)">📝 <span class="btn-label">貼付</span></button>
       <button class="mode-btn" id="viewModeBtn" title="表示モード (Ctrl+Enter)">👁 <span class="btn-label">表示</span></button>
@@ -643,6 +648,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     const editBtn = document.getElementById('editModeBtn');
     const viewBtn = document.getElementById('viewModeBtn');
     const openBtn = document.getElementById('openBtn');
+    const saveBtn = document.getElementById('saveBtn');
     const themeBtn = document.getElementById('themeBtn');
     const fileInput = document.getElementById('fileInput');
     const tocToggleBtn = document.getElementById('tocToggle');
@@ -717,7 +723,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
       tabBar.innerHTML = '';
       state.tabs.forEach(tab => {
         const el = document.createElement('div');
-        el.className = 'file-tab' + (tab.id === state.activeTabId ? ' active' : '');
+        el.className = 'file-tab' + (tab.id === state.activeTabId ? ' active' : '') + (isDirty(tab) ? ' dirty' : '');
         el.dataset.tabId = tab.id;
 
         const nameEl = document.createElement('span');
@@ -941,6 +947,9 @@ if(__exports != exports)module.exports = exports;return module.exports}));
       if (state.tabs.length <= 1) return;
       const idx = state.tabs.findIndex(t => t.id === id);
       if (idx === -1) return;
+      if (isDirty(state.tabs[idx]) &&
+          !confirm('「' + state.tabs[idx].name + '」は保存されていません。\n保存せずに閉じますか？')) return;
+      fileInfo.delete(id);
       state.tabs.splice(idx, 1);
       if (state.activeTabId === id) {
         state.activeTabId = state.tabs[Math.max(0, idx - 1)].id;
@@ -965,11 +974,29 @@ if(__exports != exports)module.exports = exports;return module.exports}));
       return filename.replace(/\.(md|markdown|mdown|txt)$/i, '') || filename;
     }
 
-    async function openFiles(fileList) {
-      const files = Array.from(fileList);
-      if (files.length === 0) return;
+    // スマホ（<input type="file">）用の入口。ファイルハンドルは無いので閲覧のみ。
+    function openFiles(fileList) {
+      return openEntries(Array.from(fileList).map(file => ({ file, handle: null })));
+    }
+
+    // entries: [{ file: File, handle: FileSystemFileHandle | null }]
+    // handle があるタブだけ上書き保存できる（PC のみ）。
+    async function openEntries(entries) {
+      if (entries.length === 0) return;
       let lastId = null;
-      for (const file of files) {
+      for (const { file, handle } of entries) {
+        // 同じファイルを既に開いていたら、二重に開かずそのタブへ移る
+        if (handle) {
+          const existingId = await findTabByHandle(handle);
+          if (existingId) {
+            const existing = state.tabs.find(t => t.id === existingId);
+            if (existing && !isDirty(existing)) {
+              try { bindFile(existing, handle, file, await readFileAsText(file)); } catch (e) { /* 読めなければ今の内容のまま */ }
+            }
+            lastId = existingId;
+            continue;
+          }
+        }
         let text;
         try {
           text = await readFileAsText(file);
@@ -980,15 +1007,17 @@ if(__exports != exports)module.exports = exports;return module.exports}));
         const baseName = stripExt(file.name);
         const act = activeTab();
         // 単一ファイルで、今のタブが空なら現在のタブに読み込む
-        if (files.length === 1 && act && !act.content.trim()) {
-          act.name = uniqueName(baseName);
-          act.content = text;
-          lastId = act.id;
+        let tab;
+        if (entries.length === 1 && act && !act.content.trim() && !fileInfo.has(act.id)) {
+          tab = act;
+          tab.name = uniqueName(baseName);
         } else {
-          const tab = { id: generateId(), name: uniqueName(baseName), content: text };
+          tab = { id: generateId(), name: uniqueName(baseName), content: '' };
           state.tabs.push(tab);
-          lastId = tab.id;
         }
+        if (handle) bindFile(tab, handle, file, text);
+        else tab.content = text;
+        lastId = tab.id;
       }
       if (lastId) state.activeTabId = lastId;
       state.mode = 'preview';
@@ -996,6 +1025,179 @@ if(__exports != exports)module.exports = exports;return module.exports}));
       renderTabs();
       syncEditorFromState();
       applyMode();
+    }
+
+    // ==================== 編集して保存（PC のみ） ====================
+    // File System Access API（開いたファイルへ書き戻せる仕組み）が使える PC の Chrome / Edge だけで有効。
+    // スマホは閲覧専用の方針なので、API があっても（Android 版 Chrome も一部対応している）無効にする。
+    const canEditFiles =
+      typeof window.showOpenFilePicker === 'function' &&
+      typeof window.showSaveFilePicker === 'function' &&
+      !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+    // タブID → { handle, savedContent, lastModified, eol }
+    // ハンドルは localStorage に入れられないため、ページを開いている間だけ覚える。
+    // 再起動後のタブは内容だけ残り、最初の保存で保存先を選び直す。
+    const fileInfo = new Map();
+
+    const PICKER_TYPES = [{
+      description: 'Markdown / テキスト',
+      accept: { 'text/markdown': ['.md', '.markdown', '.mdown'], 'text/plain': ['.txt'] }
+    }];
+
+    function isDirty(tab) {
+      const info = tab && fileInfo.get(tab.id);
+      return !!info && tab.content !== info.savedContent;
+    }
+
+    function updateDirtyMarks() {
+      tabBar.querySelectorAll('.file-tab').forEach(el => {
+        const tab = state.tabs.find(t => t.id === el.dataset.tabId);
+        el.classList.toggle('dirty', isDirty(tab));
+      });
+    }
+
+    // タブをファイルに紐づける。textarea は改行を LF に揃えるので内容も LF で持ち、
+    // 元が CRLF のファイルは保存時に CRLF へ戻す（改行コードだけの差分を作らないため）。
+    function bindFile(tab, handle, file, rawText) {
+      const eol = rawText.indexOf('\r\n') !== -1 ? '\r\n' : '\n';
+      const text = rawText.replace(/\r\n?/g, '\n');
+      tab.content = text;
+      fileInfo.set(tab.id, { handle, savedContent: text, lastModified: file.lastModified, eol });
+    }
+
+    async function findTabByHandle(handle) {
+      for (const [tabId, info] of fileInfo) {
+        try {
+          if (await info.handle.isSameEntry(handle)) return tabId;
+        } catch (e) { /* 比較できなければ別物として扱う */ }
+      }
+      return null;
+    }
+
+    async function pickAndOpenFiles() {
+      let handles;
+      try {
+        handles = await window.showOpenFilePicker({ multiple: true, types: PICKER_TYPES });
+      } catch (e) {
+        if (e && e.name === 'AbortError') return; // キャンセル
+        alert('ファイルを開けませんでした。\n' + (e && e.message ? e.message : ''));
+        return;
+      }
+      const entries = [];
+      for (const handle of handles) {
+        try {
+          entries.push({ file: await handle.getFile(), handle });
+        } catch (e) {
+          alert('「' + handle.name + '」を読み込めませんでした。\n' + (e && e.message ? e.message : ''));
+        }
+      }
+      await openEntries(entries);
+    }
+
+    function requestOpen() {
+      if (canEditFiles) pickAndOpenFiles();
+      else fileInput.click();
+    }
+
+    async function writeToHandle(handle, text, eol) {
+      const writable = await handle.createWritable();
+      await writable.write(eol === '\r\n' ? text.replace(/\n/g, '\r\n') : text);
+      await writable.close();
+    }
+
+    function flashSaved() {
+      const label = saveBtn.querySelector('.btn-label');
+      label.textContent = '保存しました';
+      clearTimeout(flashSaved.timer);
+      flashSaved.timer = setTimeout(() => { label.textContent = '保存'; }, 1500);
+    }
+
+    // 上書き保存。紐づくファイルが無いタブ、または saveAs 指定時は「名前を付けて保存」。
+    async function saveTab(tabId, saveAs) {
+      if (!canEditFiles) return false;
+      const tab = state.tabs.find(t => t.id === tabId);
+      if (!tab) return false;
+      const info = fileInfo.get(tab.id);
+      if (!info || saveAs) return saveTabAs(tab);
+
+      const text = tab.content;
+      try {
+        if ((await info.handle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
+          if ((await info.handle.requestPermission({ mode: 'readwrite' })) !== 'granted') return false;
+        }
+        // 開いた後に別の場所（Google Drive の同期や他のアプリ）で書き換えられていないか確認
+        const current = await info.handle.getFile();
+        if (current.lastModified !== info.lastModified) {
+          if (!confirm('「' + tab.name + '」は、開いた後に他の場所で変更されています。\n\nOK: この内容で上書きする\nキャンセル: 保存をやめる')) {
+            if (confirm('ファイルの最新の内容を読み込み直しますか？\n（ここでの編集内容は失われます）')) {
+              bindFile(tab, info.handle, current, await readFileAsText(current));
+              saveState();
+              renderTabs();
+              syncEditorFromState();
+              if (state.mode === 'preview') updatePreview();
+            }
+            return false;
+          }
+        }
+        await writeToHandle(info.handle, text, info.eol);
+        const written = await info.handle.getFile();
+        info.savedContent = text;
+        info.lastModified = written.lastModified;
+      } catch (e) {
+        alert('「' + tab.name + '」を保存できませんでした。\n' + (e && e.message ? e.message : '') +
+          '\n\nCtrl+Shift+S で別のファイルとして保存できます。');
+        return false;
+      }
+      updateDirtyMarks();
+      flashSaved();
+      return true;
+    }
+
+    async function saveTabAs(tab) {
+      const text = tab.content;
+      const info = fileInfo.get(tab.id);
+      let handle;
+      try {
+        handle = await window.showSaveFilePicker({
+          suggestedName: info ? info.handle.name : tab.name + '.md',
+          types: PICKER_TYPES
+        });
+      } catch (e) {
+        if (e && e.name === 'AbortError') return false; // キャンセル
+        alert('保存先を選べませんでした。\n' + (e && e.message ? e.message : ''));
+        return false;
+      }
+      try {
+        const eol = info ? info.eol : '\n';
+        await writeToHandle(handle, text, eol);
+        const written = await handle.getFile();
+        fileInfo.set(tab.id, { handle, savedContent: text, lastModified: written.lastModified, eol });
+        tab.name = stripExt(handle.name);
+      } catch (e) {
+        alert('保存できませんでした。\n' + (e && e.message ? e.message : ''));
+        return false;
+      }
+      saveState();
+      renderTabs();
+      flashSaved();
+      return true;
+    }
+
+    if (canEditFiles) {
+      saveBtn.classList.remove('hidden');
+      saveBtn.addEventListener('click', () => saveTab(state.activeTabId, false));
+      openBtn.title = 'ファイルを開く (Ctrl+O)';
+      editBtn.title = '編集モード (Ctrl+E)';
+      editBtn.querySelector('.btn-label').textContent = '編集';
+      editor.placeholder = 'ここにマークダウンを書くか、「📂 開く」でファイルを読み込んでください。Ctrl+S で保存できます。';
+      // 未保存のファイルがあるままウィンドウを閉じようとしたら確認を出す
+      window.addEventListener('beforeunload', (e) => {
+        if (state.tabs.some(isDirty)) {
+          e.preventDefault();
+          e.returnValue = '';
+        }
+      });
     }
 
     // ==================== モード切替 ====================
@@ -1037,6 +1239,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     function onEditorInput() {
       activeTab().content = editor.value;
       scheduleSave();
+      updateDirtyMarks();
     }
 
     // ==================== プレビュー描画 ====================
@@ -1110,7 +1313,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     editBtn.addEventListener('click', () => setMode('edit'));
     viewBtn.addEventListener('click', () => setMode('preview'));
     tocToggleBtn.addEventListener('click', toggleToc);
-    openBtn.addEventListener('click', () => fileInput.click());
+    openBtn.addEventListener('click', requestOpen);
     themeBtn.addEventListener('click', toggleTheme);
     fileInput.addEventListener('change', (e) => {
       const files = e.target.files;
@@ -1129,7 +1332,11 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     document.addEventListener('keydown', (e) => {
       const ctrl = e.ctrlKey || e.metaKey;
 
-      if (ctrl && e.key === 'e' && !e.shiftKey) {
+      if (ctrl && e.key.toLowerCase() === 's') {
+        if (!canEditFiles) return;
+        e.preventDefault();
+        saveTab(state.activeTabId, e.shiftKey);
+      } else if (ctrl && e.key === 'e' && !e.shiftKey) {
         e.preventDefault();
         setMode('edit');
       } else if (ctrl && e.key === 'Enter') {
@@ -1137,7 +1344,7 @@ if(__exports != exports)module.exports = exports;return module.exports}));
         setMode('preview');
       } else if (ctrl && e.key === 'o') {
         e.preventDefault();
-        fileInput.click();
+        requestOpen();
       } else if (ctrl && e.key === 't' && !e.shiftKey) {
         e.preventDefault();
         addTab();
@@ -1178,15 +1385,16 @@ if(__exports != exports)module.exports = exports;return module.exports}));
     if ('launchQueue' in window && typeof window.launchQueue.setConsumer === 'function') {
       window.launchQueue.setConsumer(async (launchParams) => {
         if (!launchParams.files || launchParams.files.length === 0) return;
-        const files = [];
+        // ハンドルも一緒に渡して、関連付けから開いたファイルもそのまま上書き保存できるようにする
+        const entries = [];
         for (const handle of launchParams.files) {
           try {
-            files.push(await handle.getFile());
+            entries.push({ file: await handle.getFile(), handle: canEditFiles ? handle : null });
           } catch (e) {
             alert('ファイルを受け取れませんでした。' + String.fromCharCode(10) + (e && e.message ? e.message : ''));
           }
         }
-        if (files.length > 0) await openFiles(files);
+        if (entries.length > 0) await openEntries(entries);
       });
     }
 
